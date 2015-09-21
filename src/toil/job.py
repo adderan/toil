@@ -371,6 +371,20 @@ class Job(object):
             self.jobWrapper = jobWrapper
             self.localTempDir = localTempDir
             self.loggingMessages = []
+
+            self.deletedJobStoreFileIDs = set()
+            
+        def getGlobalTempDir(self):
+            return self.jobStore.globalTempDir
+            
+        
+        def getLocalTempDir(self):
+            """
+            Get a new local temporary directory. This directory will exist for the 
+            duration of the job only, and is guaranteed to be deleted once
+            the job terminates, removing all files it contains recursively. 
+            """
+            return self.localTempDir
         
         def writeGlobalFile(self, localFileName):
             """

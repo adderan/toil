@@ -49,10 +49,13 @@ class FileJobStore(AbstractJobStore):
         self._checkJobStoreCreation(config != None, os.path.exists(self.jobStoreDir), self.jobStoreDir)
         #Directory where temporary files go
         self.tempFilesDir = os.path.join(self.jobStoreDir, "tmp")
+        self.globalTempDir = os.path.join(self.jobStoreDir, "gTD")
         #Creation of jobStore, if necessary
         if config != None:
             os.mkdir(self.jobStoreDir)
-            os.mkdir(self.tempFilesDir)  
+            os.mkdir(self.tempFilesDir)
+            os.mkdir(self.globalTempDir)
+
         #Parameters for creating temporary files
         self.validDirs = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
         self.levels = 2
