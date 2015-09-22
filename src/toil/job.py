@@ -37,6 +37,7 @@ logger = logging.getLogger( __name__ )
 
 from toil.lib.bioio import (setLoggingFromOptions,
                                getTotalCpuTimeAndMemoryUsage, getTotalCpuTime)
+from toil.lib.bioio import getTempDirectory
 from toil.common import setupToil, addOptions
 from toil.leader import mainLoop
 
@@ -114,6 +115,7 @@ class Job(object):
         """
         self._children.append(childJob)
         childJob._addPredecessor(self)
+
         return childJob
 
     def addService(self, service):
@@ -141,6 +143,7 @@ class Job(object):
         """
         self._followOns.append(followOnJob)
         followOnJob._addPredecessor(self)
+
         return followOnJob
 
     ##Convenience functions for creating jobs
@@ -376,6 +379,28 @@ class Job(object):
             self.localTempDir = localTempDir
             self.loggingMessages = []
             self.deletedJobStoreFileIDs = set()
+            self._globalTempDir = None
+
+        def getGlobalTempDir(self):
+            if self._globalTempDir:
+                return self._globalTempDir
+            prevDirs = []
+            prevDirPath = None
+            for prevDir in os.listdir(self.jobStore.globalTempTree):
+                prevDirs.append(int(prevDir))
+            if len(prevDirs) == 0:
+                newDirName = '1'
+            else:
+                newDirName = str(max(prevDirs) + 1)
+                prevDirNum = max(prevDirs)
+                prevDirPath = os.path.join(self.jobStore.globalTempTree, str(prevDirNum))
+
+            self._globalTempDir = os.path.join(self.jobStore.globalTempTree, newDirName)
+            os.mkdir(self._globalTempDir)
+            if prevDirPath:
+                os.system("cp %s/* %s" % (prevDirPath, self._globalTempDir))
+            return self._globalTempDir
+                    
         
         def getLocalTempDir(self):
             """
