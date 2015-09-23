@@ -81,6 +81,8 @@ class Job(object):
         #See Job.rv()
         self._rvs = {}
         self._promiseJobStore = None
+        self._globalTempDir = None
+        
 
     def run(self, fileStore):
         """
@@ -104,6 +106,10 @@ class Job(object):
         instances that contain other PromisedJobReturnValue).
         """
         pass
+    def getGlobalTempDir(self):
+        if not self._globalTempDir:
+            self._globalTempDir = getTempDirectory(self.globalTempTree)
+        return self._globalTempDir
 
     def addChild(self, childJob):
         """
@@ -115,6 +121,8 @@ class Job(object):
         """
         self._children.append(childJob)
         childJob._addPredecessor(self)
+        childJob._globalTempDir = getTempDirectory(rootDir=self.globalTempTree)
+        os.system("cp %s/* %s" % (self._globalTempDir, childJob._globalTempDir))
 
         return childJob
 
@@ -143,6 +151,7 @@ class Job(object):
         """
         self._followOns.append(followOnJob)
         followOnJob._addPredecessor(self)
+        followOnJob._globalTempDir = self._globalTempDir
 
         return followOnJob
 
@@ -379,28 +388,6 @@ class Job(object):
             self.localTempDir = localTempDir
             self.loggingMessages = []
             self.deletedJobStoreFileIDs = set()
-            self._globalTempDir = None
-
-        def getGlobalTempDir(self):
-            if self._globalTempDir:
-                return self._globalTempDir
-            prevDirs = []
-            prevDirPath = None
-            for prevDir in os.listdir(self.jobStore.globalTempTree):
-                prevDirs.append(int(prevDir))
-            if len(prevDirs) == 0:
-                newDirName = '1'
-            else:
-                newDirName = str(max(prevDirs) + 1)
-                prevDirNum = max(prevDirs)
-                prevDirPath = os.path.join(self.jobStore.globalTempTree, str(prevDirNum))
-
-            self._globalTempDir = os.path.join(self.jobStore.globalTempTree, newDirName)
-            os.mkdir(self._globalTempDir)
-            if prevDirPath:
-                os.system("cp %s/* %s" % (prevDirPath, self._globalTempDir))
-            return self._globalTempDir
-                    
         
         def getLocalTempDir(self):
             """
@@ -903,13 +890,14 @@ class Job(object):
     #children/followOn jobs
     ####################################################
 
-    def _execute(self, jobWrapper, stats, localTempDir, jobStore):
+    def _execute(self, jobWrapper, stats, localTempDir, jobStore, globalTempTree):
         """This is the core method for running the job within a worker.
         """
         if stats != None:
             startTime = time.time()
             startClock = getTotalCpuTime()
         baseDir = os.getcwd()
+        self.globalTempTree = globalTempTree
         #Run the job, first cleanup then run.
         fileStore = Job.FileStore(jobStore, jobWrapper, localTempDir)
         returnValues = self.run(fileStore)

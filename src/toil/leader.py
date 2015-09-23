@@ -25,7 +25,7 @@ import time
 import xml.etree.cElementTree as ET
 
 from toil import Process, Queue
-from toil.lib.bioio import getTotalCpuTime, logStream
+from toil.lib.bioio import getTotalCpuTime, logStream, getTempDirectory
 from toil.common import toilPackageDirPath
 
 logger = logging.getLogger( __name__ )
@@ -327,6 +327,7 @@ def mainLoop(config, batchSystem, jobStore, rootJob):
     ##########################################
 
     toilState = ToilState(jobStore, rootJob)
+    rootJob._globalTempDir = getTempDirectory(jobStore.globalTempTree)
 
     ##########################################
     #Load the jobBatcher class - used to track jobs submitted to the batch-system

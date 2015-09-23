@@ -238,7 +238,8 @@ def main():
                     jobStore)._execute( jobWrapper=job,
                                         stats=elementNode if config.stats else None, 
                                         localTempDir=localTempDir,
-                                        jobStore=jobStore)
+                                        jobStore=jobStore,
+                                        globalTempTree=jobStore.globalTempTree)
                     
                     #Remove the temporary file directory
                     shutil.rmtree(localTempDir)
