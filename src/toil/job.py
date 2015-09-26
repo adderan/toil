@@ -121,8 +121,9 @@ class Job(object):
         """
         self._children.append(childJob)
         childJob._addPredecessor(self)
-        childJob._globalTempDir = getTempDirectory(rootDir=self.globalTempTree)
-        os.system("cp %s/* %s" % (self._globalTempDir, childJob._globalTempDir))
+        if self._globalTempDir:
+            childJob._globalTempDir = getTempDirectory(rootDir=self.globalTempTree)
+            os.system("cp %s/* %s" % (self._globalTempDir, childJob._globalTempDir))
 
         return childJob
 
