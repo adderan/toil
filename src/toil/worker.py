@@ -390,7 +390,7 @@ def main():
             ET.SubElement(messageNode, "log").text = jobStoreID+"!"+logMessage
 
     if (debugging or config.stats or messages) and not workerFailed: # We have stats/logging to report back
-        jobStore.writeStatsAndLogging(ET.tostring(elementNode))
+        jobStore.writeStatsAndLogging(ET.tostring(elementNode, encoding='UTF-8'))
 
     #Remove the temp dir
     shutil.rmtree(localWorkerTempDir)
