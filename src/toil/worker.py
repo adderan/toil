@@ -369,7 +369,7 @@ def main():
             blockFn = fileStore._blockFn
             
             #Add successorJob to those to be deleted
-            fileStore.jobsToDelete.add(successorJob.jobStoreID)
+            #fileStore.jobsToDelete.add(successorJob.jobStoreID)
             
             #This will update the job once the previous job is done
             fileStore._updateJobWhenDone()            

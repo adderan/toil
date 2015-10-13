@@ -635,7 +635,6 @@ class Job(object):
                     map(self.jobStore.delete, self.jobsToDelete)
                     
                     #Delete any remnant files
-                    self.logToMaster("Deleting files: %s" % self.filesToDelete)
                     map(self.jobStore.deleteFile, self.filesToDelete)
                     
                     #Remove the files to delete list, having successfully removed the files
