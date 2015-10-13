@@ -1131,6 +1131,7 @@ class Job(object):
         self._serialiseJobGraph(jobWrapper, jobStore, returnValues, False)
         #Add the promise files to delete to the list of jobStoreFileIDs to delete
         for jobStoreFileID in promiseFilesToDelete:
+            logger.info("Deleting global file %s" % jobStoreFileID)
             fileStore.deleteGlobalFile(jobStoreFileID)
         promiseFilesToDelete.clear() 
         #Now indicate the asynchronous update of the job can happen
