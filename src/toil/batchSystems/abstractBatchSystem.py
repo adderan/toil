@@ -15,7 +15,7 @@
 
 from __future__ import absolute_import
 from collections import namedtuple
-from toil.common import getToilWorkflowDir
+from toil.common import Toil
 import os
 import shutil
 
@@ -168,10 +168,14 @@ class AbstractBatchSystem:
         relevant information for cleaning up the worker.
         """
         assert workerCleanupInfo.__class__.__name__ == 'WorkerCleanupInfo'
-        workflowDir = getToilWorkflowDir(workerCleanupInfo.workflowID, workerCleanupInfo.workDir)
+        workflowDir = Toil.getWorkflowDir(workerCleanupInfo.workflowID, workerCleanupInfo.workDir)
         dirIsEmpty = os.listdir(workflowDir) == []
         cleanWorkDir = workerCleanupInfo.cleanWorkDir
-        if cleanWorkDir == 'always' or ((cleanWorkDir == 'onSuccess' or cleanWorkDir == 'onError') and dirIsEmpty):
+
+        cleanAlways = cleanWorkDir == 'always'
+        cleanOnSuccessOrError = ((cleanWorkDir == 'onSuccess' or cleanWorkDir == 'onError') and dirIsEmpty)
+
+        if cleanAlways or cleanOnSuccessOrError:
             shutil.rmtree(workflowDir)
 
 

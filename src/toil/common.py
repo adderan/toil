@@ -13,6 +13,8 @@
 # limitations under the License.
 
 from __future__ import absolute_import
+
+import re
 from contextlib import contextmanager
 import logging
 import os
@@ -22,10 +24,12 @@ import time
 import tempfile
 from argparse import ArgumentParser
 from bd2k.util.humanize import bytes2human
+from toil.leader import FailedJobsException, mainLoop
 
 from toil.lib.bioio import addLoggingOptions, getLogLevelString
+from toil.realtimeLogger import RealtimeLogger
 
-logger = logging.getLogger( __name__ )
+logger = logging.getLogger(__name__)
 
 
 class Config(object):
@@ -178,6 +182,7 @@ class Config(object):
         #Debug options
         setOption("badWorker", float, fC(0.0, 1.0))
         setOption("badWorkerFailInterval", float, fC(0.0))
+
 
 def _addOptions(addGroupFn, config):
     #
@@ -353,152 +358,275 @@ def addOptions(parser, config=Config()):
         raise RuntimeError("Unanticipated class passed to addOptions(), %s. Expecting "
                            "argparse.ArgumentParser" % parser.__class__)
 
-def loadBatchSystem(config):
-    """
-    Load the configured batch system class, instantiate it and return the instance.
-    """
-    batchSystemClass, kwargs = loadBatchSystemClass(config)
-    return createBatchSystem(config, batchSystemClass, kwargs)
 
-def loadBatchSystemClass(config):
+class Toil:
     """
-    Returns a pair containing the concrete batch system class and a dictionary of keyword arguments to be passed to
-    the constructor of that class.
-
-    :param config: the current configuration
-    :param key: the name of the configuration attribute that holds the configured batch system name
+    Represents a toil workflow, specifically its batch system, job store, and configuration. This
+    class is should be instantiated with a context manager.
     """
-    from toil.batchSystems.parasol import ParasolBatchSystem
-    from toil.batchSystems.gridengine import GridengineBatchSystem
-    from toil.batchSystems.singleMachine import SingleMachineBatchSystem
-    from toil.batchSystems.lsf import LSFBatchSystem
-    batchSystemName = config.batchSystem
-    kwargs = dict(config=config,
-                  maxCores=config.maxCores,
-                  maxMemory=config.maxMemory,
-                  maxDisk=config.maxDisk)
-    if batchSystemName == 'parasol':
-        batchSystemClass = ParasolBatchSystem
-        logger.info('Using the parasol batch system')
-    elif batchSystemName == 'single_machine' or batchSystemName == 'singleMachine':
-        batchSystemClass = SingleMachineBatchSystem
-        logger.info('Using the single machine batch system')
-    elif batchSystemName == 'gridengine' or batchSystemName == 'gridEngine':
-        batchSystemClass = GridengineBatchSystem
-        logger.info('Using the grid engine machine batch system')
-    elif batchSystemName == 'lsf' or batchSystemName == 'LSF':
-        batchSystemClass = LSFBatchSystem
-        logger.info('Using the lsf batch system')
-    elif batchSystemName == 'mesos' or batchSystemName == 'Mesos':
-        from toil.batchSystems.mesos.batchSystem import MesosBatchSystem
-        batchSystemClass = MesosBatchSystem
-        kwargs['masterAddress'] = config.mesosMasterAddress
-        logger.info('Using the mesos batch system')
-    else:
-        raise RuntimeError('Unrecognised batch system: %s' % batchSystemName)
-    return batchSystemClass, kwargs
+    def __init__(self, options):
+        """
+        Sets options, and initializes job store, batch system, config, and jobCache to None. These
+        variables will later be set in either run() or __enter__().
 
-def createBatchSystem(config, batchSystemClass, kwargs):
+        :param options: The user specified options for the workflow
+        """
+        self.options = options
+
+        self.config = None
+        self.jobStore = None
+        self.batchSystem = None
+        self.jobCache = dict()
+
+    def __enter__(self):
+        """
+        Loads and sets proper config and job store. If the configurations indicate that this is
+        a restart then the config and job store are reloaded from the previous job store.
+        """
+        self.config = Config()
+        self.config.setOptions(self.options)
+        self.jobStore = self.loadOrCreateJobStore(self.config.jobStore,
+                                                  config=self.config if not self.config.restart else None)
+
+        if self.config.restart:
+            # reload configure from job store
+            self.config = self.jobStore.config
+            self.config.setOptions(self.options)
+            self.jobStore.writeConfigToStore()
+
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """
+        Cleans up after a toil run. The job store is deleted based on the configurations.
+        """
+        if ((exc_type == ToilConfigException and self.config.clean == "onError") or
+                self.config.clean == "onSuccess" or
+                self.config.clean == "always"):
+
+            self.jobStore.deleteJobStore()
+
+        return False  # this will let exceptions through
+
+    def run(self, job=None):
+        """
+        Runs a toil workflow with the given job as root. If no job is specified and the current config
+        indicates that this is a restart the root job of the last run is used. This method must be called
+        in a Toil context manager.
+
+        :param toil.job.Job job: The root job for the workflow
+        """
+        # Assert that we are inside the context manager
+        if self.jobStore is None:
+            # __enter__() sets self.jobStore
+            raise RuntimeError("Toil class cannot be instantiated outside of a context manager")
+
+        self.batchSystem = self.createBatchSystem(self.config, jobStore=self.jobStore,
+                                                  userScript=job.getUserScript() if job is not None else None)
+
+        with RealtimeLogger(self.batchSystem, level=self.options.logLevel if self.options.realTimeLogging else None):
+            try:
+                self._setBatchSystemEnvVars()
+                self._serialiseEnvironment()
+
+                logger.info("Downloading entire JobStore")
+                self._cacheJobs()
+                logger.info("{} jobs downloaded.".format(len(self.jobCache)))
+
+                if job is not None:
+                    if self.config.restart:
+                        raise ToilConfigException('Root job given on restart toil workflow')
+
+                    # Make a file to store the root jobs return value in
+                    jobStoreFileID = self.jobStore.getEmptyFileStoreID()
+
+                    # Add the root job return value as a promise
+                    if None not in job._rvs:
+                        job._rvs[None] = []
+                    job._rvs[None].append(jobStoreFileID)
+
+                    # Write the name of the promise file in a shared file
+                    with self.jobStore.writeSharedFileStream("rootJobReturnValue") as fH:
+                        fH.write(jobStoreFileID)
+
+                    # Setup the first wrapper and cache it
+                    rootJob = job._serialiseFirstJob(self.jobStore)
+                    self._cacheJob(rootJob)
+
+                else:  # Restart Case
+                    if not self.config.restart:
+                        raise ToilConfigException('No root job given on non restart workflow')
+
+                    # This cleans up any half written jobs after a restart
+                    rootJob = self.jobStore.clean(jobCache=self.jobCache)
+
+                return mainLoop(self.config, self.batchSystem, self.jobStore, rootJob, jobCache=self.jobCache)
+
+            finally:
+                startTime = time.time()
+                logger.debug('Shutting down batch system')
+                self.batchSystem.shutdown()
+                logger.debug('Finished shutting down the batch system in %s seconds.' % (time.time() - startTime))
+
+
+    @staticmethod
+    def loadOrCreateJobStore(jobStoreString, config=None):
+        """
+        Loads an existing jobStore if it already exists. Otherwise a new instance of a jobStore is
+        created and returned.
+
+        :param str jobStoreString: see exception message below
+        :param toil.common.Config config: see AbstractJobStore.__init__
+        :return: an instance of a concrete subclass of AbstractJobStore
+        :rtype: jobStores.abstractJobStore.AbstractJobStore
+        """
+        if jobStoreString[0] in '/.':
+            jobStoreString = 'file:' + jobStoreString
+
+        try:
+            jobStoreName, jobStoreArgs = jobStoreString.split(':', 1)
+        except ValueError:
+            raise RuntimeError(
+                'Job store string must either be a path starting in . or / or a contain at least one '
+                'colon separating the name of the job store implementation from an initialization '
+                'string specific to that job store. If a path starting in . or / is passed, the file '
+                'job store will be used for backwards compatibility.' )
+
+        if jobStoreName == 'file':
+            from toil.jobStores.fileJobStore import FileJobStore
+            return FileJobStore(jobStoreArgs, config=config)
+
+        elif jobStoreName == 'aws':
+            from toil.jobStores.aws.jobStore import AWSJobStore
+            return AWSJobStore.createJobStore(jobStoreArgs, config=config)
+
+        elif jobStoreName == 'azure':
+            from toil.jobStores.azureJobStore import AzureJobStore
+            account, namePrefix = jobStoreArgs.split(':', 1)
+            return AzureJobStore(account, namePrefix, config=config)
+
+        else:
+            raise RuntimeError("Unknown job store implementation '%s'" % jobStoreName)
+
+    @staticmethod
+    def createBatchSystem(config, jobStore=None, userScript=None):
+        """
+        Creates an instance of the batch system specified in the given config. If a job store and a user
+        script are given then the user script can be hot deployed into the workflow.
+
+        :param toil.common.Config config: the current configuration
+        :param jobStores.abstractJobStore.AbstractJobStore jobStore: an instance of a jobStore
+        :param ModuleDescriptor userScript: a user supplied script to use for hot development
+        :return: an instance of a concrete subclass of AbstractBatchSystem
+        :rtype: batchSystems.abstractBatchSystem.AbstractBatchSystem
+        """
+        kwargs = dict(config=config,
+                      maxCores=config.maxCores,
+                      maxMemory=config.maxMemory,
+                      maxDisk=config.maxDisk)
+
+        if config.batchSystem == 'parasol':
+            from toil.batchSystems.parasol import ParasolBatchSystem
+            batchSystemClass = ParasolBatchSystem
+
+        elif config.batchSystem == 'single_machine' or config.batchSystem == 'singleMachine':
+            from toil.batchSystems.singleMachine import SingleMachineBatchSystem
+            batchSystemClass = SingleMachineBatchSystem
+
+        elif config.batchSystem == 'gridengine' or config.batchSystem == 'gridEngine':
+            from toil.batchSystems.gridengine import GridengineBatchSystem
+            batchSystemClass = GridengineBatchSystem
+
+        elif config.batchSystem == 'lsf' or config.batchSystem == 'LSF':
+            from toil.batchSystems.lsf import LSFBatchSystem
+            batchSystemClass = LSFBatchSystem
+
+        elif config.batchSystem == 'mesos' or config.batchSystem == 'Mesos':
+            from toil.batchSystems.mesos.batchSystem import MesosBatchSystem
+            batchSystemClass = MesosBatchSystem
+
+            kwargs['masterAddress'] = config.mesosMasterAddress
+
+        else:
+            raise RuntimeError('Unrecognised batch system: %s' % config.batchSystem)
+
+        logger.info('Using the %s' %
+                    re.sub("([a-z])([A-Z])", "\g<1> \g<2>", batchSystemClass.__name__).lower())
+
+        if jobStore is not None and userScript is not None:
+            hotDeployUserScript = (not userScript.belongsToToil and batchSystemClass.supportsHotDeployment())
+            if hotDeployUserScript:
+                kwargs['userScript'] = userScript.saveAsResourceTo(jobStore)
+                # TODO: toil distribution
+
+        return batchSystemClass(**kwargs)
+
+    def _setBatchSystemEnvVars(self):
+        """
+        Sets the environment variables required by the job store and those passed on command line.
+        """
+        for envDict in (self.jobStore.getEnv(), self.config.environment):
+            for k, v in envDict.iteritems():
+                self.batchSystem.setEnv(k, v)
+
+    def _serialiseEnvironment(self):
+        """
+        Puts the environment in a globally accessible pickle file.
+        """
+        # Dump out the environment of this process in the environment pickle file.
+        with self.jobStore.writeSharedFileStream("environment.pickle") as fileHandle:
+            cPickle.dump(os.environ, fileHandle, cPickle.HIGHEST_PROTOCOL)
+        logger.info("Written the environment for the jobs to the environment file")
+
+    def _cacheJobs(self):
+        """
+        Downloads all jobs in the current job store into self.jobCache.
+        """
+        self.jobCache = {jobWrapper.jobStoreID: jobWrapper for jobWrapper in self.jobStore.jobs()}
+
+    def _cacheJob(self, job):
+        """
+        Adds given job to curent jobCache.
+
+        :param toil.jobWrapper.JobWrapper job: job to be added to current job cache
+        """
+        self.jobCache[job.jobStoreID] = job
+
+    @staticmethod
+    def getWorkflowDir(workflowID, configWorkDir=None):
+        """
+        Returns a path to the directory where worker directories and the cache will be located for this
+        workflow.
+
+        :param str workflowID: Unique identifier for the workflow
+        :param str configWorkDir: Value passed to the program using the --workDir flag
+        :return: Path to the workflow directory
+        :rtype: str
+        """
+        workDir = configWorkDir or os.getenv('TOIL_WORKDIR') or tempfile.gettempdir()
+        if not os.path.exists(workDir):
+            raise RuntimeError("The directory specified by --workDir or TOIL_WORKDIR (%s) does not "
+                               "exist." % workDir)
+        # Create the workflow dir
+        workflowDir = os.path.join(workDir, 'toil-%s' % workflowID)
+        try:
+            # Directory creation is atomic
+            os.mkdir(workflowDir)
+        except OSError as err:
+            if err.errno != 17:
+                # The directory exists if a previous worker set it up.
+                raise
+        else:
+            logger.info('Created the workflow directory at %s' % workflowDir)
+        return workflowDir
+
+
+class ToilConfigException(Exception):
     """
-    Returns an instance of the given batch system class, or if a big batch system is configured, a batch system
-    instance that combines the given class with the configured big batch system.
-
-    :param config: the current configuration
-    :param batchSystemClass: the class to be instantiated
-    :param kwargs: a list of keyword arguments to be passed to the given class' constructor
+    Misconfigured toil workflow exception
     """
-    batchSystem = batchSystemClass(**kwargs)
-    return batchSystem
-
-def loadJobStore( jobStoreString, config=None ):
-    """
-    Loads a jobStore.
-
-    :param jobStoreString: see exception message below
-    :param config: see AbstractJobStore.__init__
-    :return: an instance of a concrete subclass of AbstractJobStore
-    :rtype: jobStores.abstractJobStore.AbstractJobStore
-    """
-    if jobStoreString[ 0 ] in '/.':
-        jobStoreString = 'file:' + jobStoreString
-
-    try:
-        jobStoreName, jobStoreArgs = jobStoreString.split( ':', 1 )
-    except ValueError:
-        raise RuntimeError(
-            'Job store string must either be a path starting in . or / or a contain at least one '
-            'colon separating the name of the job store implementation from an initialization '
-            'string specific to that job store. If a path starting in . or / is passed, the file '
-            'job store will be used for backwards compatibility.' )
-
-    if jobStoreName == 'file':
-        from toil.jobStores.fileJobStore import FileJobStore
-        return FileJobStore( jobStoreArgs, config=config )
-    elif jobStoreName == 'aws':
-        from toil.jobStores.aws.jobStore import AWSJobStore
-        return AWSJobStore.createJobStore( jobStoreArgs, config=config )
-    elif jobStoreName == 'azure':
-        from toil.jobStores.azureJobStore import AzureJobStore
-        account, namePrefix = jobStoreArgs.split( ':', 1 )
-        return AzureJobStore( account, namePrefix, config=config )
-    else:
-        raise RuntimeError( "Unknown job store implementation '%s'" % jobStoreName )
-
-def serialiseEnvironment(jobStore):
-    """
-    Puts the environment in a globally accessible pickle file.
-    """
-    #Dump out the environment of this process in the environment pickle file.
-    with jobStore.writeSharedFileStream("environment.pickle") as fileHandle:
-        cPickle.dump(os.environ, fileHandle, cPickle.HIGHEST_PROTOCOL)
-    logger.info("Written the environment for the jobs to the environment file")
-
-@contextmanager
-def setupToil(options, userScript=None):
-    """
-    Creates the data-structures needed for running a toil.
-
-    :type userScript: toil.resource.ModuleDescriptor
-    """
-    #Make the default config object
-    config = Config()
-    #Get options specified by the user
-    config.setOptions(options)
-    if not options.restart: #Create for the first time
-        batchSystemClass, kwargs = loadBatchSystemClass(config)
-        #Load the jobStore
-        jobStore = loadJobStore(config.jobStore, config=config)
-    else:
-        #Reload the workflow
-        jobStore = loadJobStore(config.jobStore)
-        config = jobStore.config
-        #Update the earlier config with any options that have been set
-        config.setOptions(options)
-        #Write these new options back to disk
-        jobStore.writeConfigToStore()
-        #Get the batch system class
-        batchSystemClass, kwargs = loadBatchSystemClass(config)
-    if (userScript is not None
-        and not userScript.belongsToToil
-        and batchSystemClass.supportsHotDeployment()):
-        kwargs['userScript'] = userScript.saveAsResourceTo(jobStore)
-        # TODO: toil distribution
-
-    batchSystem = createBatchSystem(config, batchSystemClass, kwargs)
-    try:
-        # Set environment variables required by job store
-        for k, v in jobStore.getEnv().iteritems():
-            batchSystem.setEnv(k, v)
-        # Set environment variables passed on command line
-        for k, v in config.environment.iteritems():
-            batchSystem.setEnv(k, v)
-        serialiseEnvironment(jobStore)
-        yield (config, batchSystem, jobStore)
-    finally:
-        startTime = time.time()
-        logger.debug('Shutting down batch system')
-        batchSystem.shutdown()
-        logger.debug('Finished shutting down the batch system in %s seconds.' % (time.time() - startTime))
+    def __init__(self, message):
+        super(ToilConfigException, self).__init__(message)
 
 # Nested functions can't have doctests so we have to make this global
 
@@ -543,31 +671,3 @@ def parseSetEnv(l):
             raise ValueError('Empty name')
         d[k] = v
     return d
-
-
-def getToilWorkflowDir(workflowID, configWorkDir=None):
-    """
-    Returns a path to the directory where worker directories and the cache will be located for this
-    workflow.
-
-    :param str workflowID: Unique identifier for the workflow
-    :param str configWorkDir: Value passed to the program using the --workDir flag
-    :return: Path to the workflow directory
-    :rtype: str
-    """
-    workDir = configWorkDir or os.getenv('TOIL_WORKDIR') or tempfile.gettempdir()
-    if not os.path.exists(workDir):
-        raise RuntimeError("The directory specified by --workDir or TOIL_WORKDIR (%s) does not "
-                           "exist." % workDir)
-    # Create the workflow dir
-    workflowDir = os.path.join(workDir, 'toil-%s' % workflowID)
-    try:
-        # Directory creation is atomic
-        os.mkdir(workflowDir)
-    except OSError as err:
-        if err.errno != 17:
-            # The directory exists if a previous worker set it up.
-            raise
-    else:
-        logger.info('Created the workflow directory at %s' % workflowDir)
-    return workflowDir

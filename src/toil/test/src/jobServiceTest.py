@@ -109,7 +109,7 @@ class JobServiceTest(ToilTest):
         options.logLevel = "INFO"
         
         options.retryCount = retryCount
-        #options.clean = "never"
+        options.clean = "never"
         options.badWorker = badWorker
         options.badWorkerFailInterval = badWorkedFailInterval
         options.servicePollingInterval = 1
