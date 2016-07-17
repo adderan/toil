@@ -539,6 +539,7 @@ class Toil(object):
         self._batchSystem = self.createBatchSystem(self.config, 
                                                    jobStore=self._jobStore,
                                                    userScript=rootJob.getUserScript())
+        self._provisioner = self.createProvisioner(self.config)
         try:
             self._setBatchSystemEnvVars()
             self._serialiseEnv()
@@ -628,6 +629,18 @@ class Toil(object):
         jobStore = cls.getJobStore(locator)
         jobStore.resume()
         return jobStore
+
+    @staticmethod
+    def createProvisioner(config):
+        kwargs = dict(config=config)
+        if not config.provisioner:
+            return None
+        if config.provisioner == 'cgcloud':
+            from toil.provisioners.aws import AWSProvisioner
+            provisionerClass = AWSProvisioner
+
+        return provisionerClass(**kwargs)
+
 
     @staticmethod
     def createBatchSystem(config, jobStore=None, userScript=None):
