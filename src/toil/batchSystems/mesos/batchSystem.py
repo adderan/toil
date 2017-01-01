@@ -396,16 +396,6 @@ class MesosBatchSystem(BatchSystemSupport,
                     remainingMemory -= toMiB(jobType.memory)
                     remainingDisk -= toMiB(jobType.disk)
                     nextToLaunchIndex += 1
-                if self.jobQueues[jobType] and not runnableTasksOfType:
-                    log.debug('Offer %(offer)s not suitable to run the tasks with requirements '
-                              '%(requirements)r. Mesos offered %(memory)s memory, %(cores)s cores '
-                              'and %(disk)s of disk on a %(non)spreemptable slave.',
-                              dict(offer=offer.id.value,
-                                   requirements=jobType,
-                                   non='' if offerPreemptable else 'non-',
-                                   memory=fromMiB(offerMemory),
-                                   cores=offerCores,
-                                   disk=fromMiB(offerDisk)))
                 runnableTasks.extend(runnableTasksOfType)
             # Launch all runnable tasks together so we only call launchTasks once per offer
             if runnableTasks:
@@ -421,10 +411,6 @@ class MesosBatchSystem(BatchSystemSupport,
 
         if unableToRun and time.time() > (self.lastTimeOfferLogged + self.logPeriod):
             self.lastTimeOfferLogged = time.time()
-            log.debug('Although there are queued jobs, none of them were able to run in '
-                     'any of the offers extended to the framework. There are currently '
-                     '%i jobs running. Enable debug level logging to see more details about '
-                     'job types and offers received.', len(self.runningJobMap))
 
     def _trackOfferedNodes(self, offers):
         for offer in offers:
