@@ -300,7 +300,7 @@ class MesosBatchSystem(BatchSystemSupport,
 
     def _declineAllOffers(self, driver, offers):
         for offer in offers:
-            log.debug("Declining offer %s.", offer.id.value)
+            #log.debug("Declining offer %s.", offer.id.value)
             driver.declineOffer(offer.id)
 
     def _parseOffer(self, offer):
@@ -353,7 +353,7 @@ class MesosBatchSystem(BatchSystemSupport,
 
         # TODO: We may want to assert that numIssued >= numRunning
         if not jobTypes or len(self.getIssuedBatchJobIDs()) == len(self.getRunningBatchJobIDs()):
-            log.debug('There are no queued tasks. Declining Mesos offers.')
+            #log.debug('There are no queued tasks. Declining Mesos offers.')
             # Without jobs, we can get stuck with no jobs and no new offers until we decline it.
             self._declineAllOffers(driver, offers)
             return
@@ -364,7 +364,7 @@ class MesosBatchSystem(BatchSystemSupport,
             runnableTasks = []
             # TODO: In an offer, can there ever be more than one resource with the same name?
             offerCores, offerMemory, offerDisk, offerPreemptable = self._parseOffer(offer)
-            log.debug('Got offer %s for a %spreemptable slave with %.2f MiB memory, %.2f core(s) '
+            #log.debug('Got offer %s for a %spreemptable slave with %.2f MiB memory, %.2f core(s) '
                       'and %.2f MiB of disk.', offer.id.value, '' if offerPreemptable else 'non-',
                       offerMemory, offerCores, offerDisk)
             remainingCores = offerCores
@@ -405,8 +405,8 @@ class MesosBatchSystem(BatchSystemSupport,
                     self._updateStateToRunning(offer, task)
                     log.debug('Launched Mesos task %s.', task.task_id.value)
             else:
-                log.debug('Although there are queued jobs, none of them could be run with offer %s '
-                          'extended to the framework.', offer.id)
+                #log.debug('Although there are queued jobs, none of them could be run with offer %s '
+                #          'extended to the framework.', offer.id)
                 driver.declineOffer(offer.id)
 
         if unableToRun and time.time() > (self.lastTimeOfferLogged + self.logPeriod):
@@ -512,7 +512,7 @@ class MesosBatchSystem(BatchSystemSupport,
         """
         Invoked when an executor sends a message.
         """
-        log.debug('Got framework message from executor %s running on slave %s: %s',
+        #log.debug('Got framework message from executor %s running on slave %s: %s',
                   executorId.value, slaveId.value, message)
         message = ast.literal_eval(message)
         assert isinstance(message, dict)
