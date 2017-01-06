@@ -365,8 +365,8 @@ class MesosBatchSystem(BatchSystemSupport,
             # TODO: In an offer, can there ever be more than one resource with the same name?
             offerCores, offerMemory, offerDisk, offerPreemptable = self._parseOffer(offer)
             #log.debug('Got offer %s for a %spreemptable slave with %.2f MiB memory, %.2f core(s) '
-                      'and %.2f MiB of disk.', offer.id.value, '' if offerPreemptable else 'non-',
-                      offerMemory, offerCores, offerDisk)
+            #          'and %.2f MiB of disk.', offer.id.value, '' if offerPreemptable else 'non-',
+            #          offerMemory, offerCores, offerDisk)
             remainingCores = offerCores
             remainingMemory = offerMemory
             remainingDisk = offerDisk
@@ -513,7 +513,7 @@ class MesosBatchSystem(BatchSystemSupport,
         Invoked when an executor sends a message.
         """
         #log.debug('Got framework message from executor %s running on slave %s: %s',
-                  executorId.value, slaveId.value, message)
+        #          executorId.value, slaveId.value, message)
         message = ast.literal_eval(message)
         assert isinstance(message, dict)
         # Handle the mandatory fields of a message
