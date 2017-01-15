@@ -153,6 +153,9 @@ class AbstractJobStoreTest:
             self.assertEquals(jobOnMaster.predecessorsFinished, set())
             self.assertEquals(jobOnMaster.logJobStoreFileID, None)
 
+            
+
+
             # Create a second instance of the job store, simulating a worker ...
             #
             worker = self._createJobStore()
@@ -357,6 +360,18 @@ class AbstractJobStoreTest:
             master.delete(jobOnMaster.jobStoreID)
             self.assertFalse(master.exists(jobOnMaster.jobStoreID))
             # TODO: Who deletes the shared files?
+
+        def testOverlargeJob(self):
+            master = self.master
+            masterRequirements = dict(memory=12, cores=34, disk=35, preemptable=True)
+            overlargeJobNodeOnMaster = JobNode(command='master-overlarge',
+                                      requirements=masterRequirements,
+                                      jobName='test-overlarge', unitName='onMaster',
+                                      jobStoreID=None, predecessorNumber=0)
+            overlargeJobOnMaster = master.create(overlargeJobNodeOnMaster, forceOverlarge=True)
+            self.assertTrue(master.exists(overlargeJobOnMaster.jobStoreID))
+            overlargeJobOnMasterDownloaded = master.load(overlargeJobOnMaster.jobStoreID)
+            master.delete(overlargeJobOnMaster.jobStoreID)
 
         def _prepareTestFile(self, store, size=None):
             """
