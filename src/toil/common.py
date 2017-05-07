@@ -78,14 +78,14 @@ class Config(object):
 
         #Autoscaling options
         self.provisioner = None
-        self.nodeType = None
+        self.nodeTypes = []
         self.nodeOptions = None
-        self.minNodes = 0
-        self.maxNodes = 10
-        self.preemptableNodeType = None
+        self.minNodes = [0]
+        self.maxNodes = [10]
+        self.preemptableNodeTypes = []
         self.preemptableNodeOptions = None
-        self.minPreemptableNodes = 0
-        self.maxPreemptableNodes = 0
+        self.minPreemptableNodes = []
+        self.maxPreemptableNodes = []
         self.alphaPacking = 0.8
         self.betaInertia = 1.2
         self.scaleInterval = 30
@@ -171,6 +171,14 @@ class Config(object):
                 return Toil.buildLocator(name, os.path.abspath(rest))
             else:
                 return s
+        def parseStrList(s):
+            s = s.split(",")
+            s = [str(x) for x in s]
+            return s
+        def parseIntList(s):
+            s = s.split(",")
+            s = [int(x) for x in s]
+            return s
 
         #Core options
         setOption("jobStore", parsingFn=parseJobStore)
@@ -210,14 +218,14 @@ class Config(object):
 
         #Autoscaling options
         setOption("provisioner")
-        setOption("nodeType")
+        setOption("nodeTypes", parseStrList)
         setOption("nodeOptions")
-        setOption("minNodes", int)
-        setOption("maxNodes", int)
-        setOption("preemptableNodeType")
+        setOption("minNodes", parseIntList)
+        setOption("maxNodes", parseIntList)
+        setOption("preemptableNodeTypes", parseStrList)
         setOption("preemptableNodeOptions")
-        setOption("minPreemptableNodes", int)
-        setOption("maxPreemptableNodes", int)
+        setOption("minPreemptableNodes", parseIntList)
+        setOption("maxPreemptableNodes", parseIntList)
         setOption("alphaPacking", float)
         setOption("betaInertia", float)
         setOption("scaleInterval", float)
@@ -382,7 +390,7 @@ def _addOptions(addGroupFn, config):
                         help=_help + ' The default is %s.' % getattr(config, name),
                         **kwargs)
 
-        _addOptionFn('nodeType', metavar='TYPE',
+        _addOptionFn('nodeTypes', metavar='TYPE',
                      help="Node type for {non-|}preemptable nodes. The syntax depends on the "
                           "provisioner used. For the cgcloud and AWS provisioners this is the name "
                           "of an EC2 instance type{|, followed by a colon and the price in dollar "

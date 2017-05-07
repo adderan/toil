@@ -525,8 +525,8 @@ class AWSProvisioner(AbstractProvisioner):
                 else:
                     raise
 
-    def _addNodes(self, instances, numNodes, preemptable=False):
-        bdm = self._getBlockDeviceMapping(self.instanceType)
+    def _addNodes(self, nodeType, numNodes, preemptable=False):
+        bdm = self._getBlockDeviceMapping(nodeType)
         arn = self._getProfileARN(self.ctx)
         keyPath = '' if not self.config.sseKey else self.config.sseKey
         entryPoint = 'mesos-slave' if not self.config.sseKey else "waitForKey.sh"
@@ -539,7 +539,7 @@ class AWSProvisioner(AbstractProvisioner):
         sgs = [sg for sg in self.ctx.ec2.get_all_security_groups() if sg.name == self.clusterName]
         kwargs = {'key_name': self.keyName,
                   'security_group_ids': [sg.id for sg in sgs],
-                  'instance_type': self.instanceType.name,
+                  'instance_type': nodeType,
                   'user_data': userData,
                   'block_device_map': bdm,
                   'instance_profile_arn': arn,
@@ -559,7 +559,7 @@ class AWSProvisioner(AbstractProvisioner):
                                                                   spec=kwargs, num_instances=numNodes)
                 else:
                     logger.info('Launching %s preemptable nodes', numNodes)
-                    kwargs['placement'] = getSpotZone(self.spotBid, self.instanceType.name, self.ctx)
+                    kwargs['placement'] = getSpotZone(self.spotBid, nodeType, self.ctx)
                     # force generator to evaluate
                     instancesLaunched = list(create_spot_instances(ec2=self.ctx.ec2,
                                                                    price=self.spotBid,
@@ -625,14 +625,14 @@ class AWSProvisioner(AbstractProvisioner):
         elif both:
             return [x for x in instances.union(set(runningInstances))]
 
-    def _getNodesInCluster(self, preeptable=False, both=False):
+    def _getNodesInCluster(self, preeptable=False, both=False, nodeType=None):
         if not both:
-            return self.__getNodesInCluster(self.ctx, self.clusterName, preemptable=preeptable)
+            return self.__getNodesInCluster(self.ctx, self.clusterName, preemptable=preeptable, nodeType=nodeType)
         else:
-            return self.__getNodesInCluster(self.ctx, self.clusterName, both=both)
+            return self.__getNodesInCluster(self.ctx, self.clusterName, both=both, nodeType=nodeType)
 
-    def _getWorkersInCluster(self, preemptable):
-        entireCluster = self._getNodesInCluster(both=True)
+    def _getWorkersInCluster(self, preemptable, nodeType):
+        entireCluster = self._getNodesInCluster(both=True, nodeType=nodeType)
         logger.debug('All nodes in cluster %s', entireCluster)
         workerInstances = [i for i in entireCluster if i.private_ip_address != self.leaderIP and
                            preemptable != (i.spot_instance_request_id is None)]

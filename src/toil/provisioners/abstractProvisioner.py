@@ -59,6 +59,9 @@ class AbstractProvisioner(object):
         self.statsThreads = []
         self.statsPath = config.clusterStats
         self.scaleable = isinstance(self.batchSystem, AbstractScalableBatchSystem)
+        self.nodeShapes = [self.getNodeShape(nodeType) for nodeType in config.nodeTypes]
+        self.nodeShapes.sort()
+        self.preemptableNodeShapes = [self.getNodeShape(nodeType) for nodeType in config.preemptableNodeTypes]
 
     @staticmethod
     def retryPredicate(e):
@@ -144,7 +147,7 @@ class AbstractProvisioner(object):
         else:
             pass
 
-    def setNodeCount(self, numNodes, preemptable=False, force=False):
+    def setNodeCount(self, numNodes, preemptable=False, nodeType=None, force=False):
         """
         Attempt to grow or shrink the number of prepemptable or non-preemptable worker nodes in
         the cluster to the given value, or as close a value as possible, and, after performing
@@ -167,14 +170,15 @@ class AbstractProvisioner(object):
         """
         for attempt in retry(predicate=self.retryPredicate):
             with attempt:
-                workerInstances = self._getWorkersInCluster(preemptable)
+                workerInstances = self._getWorkersInCluster(preemptable=preemptable, nodeType=nodeType)
                 numCurrentNodes = len(workerInstances)
                 delta = numNodes - numCurrentNodes
                 if delta > 0:
                     log.info('Adding %i %s nodes to get to desired cluster size of %i.', delta, 'preemptable' if preemptable else 'non-preemptable', numNodes)
                     numNodes = numCurrentNodes + self._addNodes(workerInstances,
                                                                 numNodes=delta,
-                                                                preemptable=preemptable)
+                                                                preemptable=preemptable,
+                                                                nodeType=nodeType)
                 elif delta < 0:
                     log.info('Removing %i %s nodes to get to desired cluster size of %i.', -delta, 'preemptable' if preemptable else 'non-preemptable', numNodes)
                     numNodes = numCurrentNodes - self._removeNodes(workerInstances,
@@ -190,6 +194,7 @@ class AbstractProvisioner(object):
         # each node as the primary criterion to select which nodes to terminate.
         if isinstance(self.batchSystem, AbstractScalableBatchSystem):
             nodes = self.batchSystem.getNodes(preemptable)
+
             # Join nodes and instances on private IP address.
             nodes = [(instance, nodes.get(instance.private_ip_address)) for instance in instances]
             log.debug('Nodes considered to terminate: %s', ' '.join(map(str, nodes)))
@@ -229,7 +234,7 @@ class AbstractProvisioner(object):
         return len(instances)
 
     @abstractmethod
-    def _addNodes(self, instances, numNodes, preemptable):
+    def _addNodes(self, instances, numNodes, preemptable, nodeType):
         raise NotImplementedError
 
     @abstractmethod
@@ -237,7 +242,7 @@ class AbstractProvisioner(object):
         raise NotImplementedError
 
     @abstractmethod
-    def _getWorkersInCluster(self, preemptable):
+    def _getWorkersInCluster(self, preemptable, nodeType):
         raise NotImplementedError
 
     @abstractmethod
@@ -245,7 +250,7 @@ class AbstractProvisioner(object):
         raise NotImplementedError
 
     @abstractmethod
-    def getNodeShape(self, preemptable=False):
+    def getNodeShape(self, nodeType=None):
         """
         The shape of a preemptable or non-preemptable node managed by this provisioner. The node
         shape defines key properties of a machine, such as its number of cores or the time

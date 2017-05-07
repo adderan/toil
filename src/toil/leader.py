@@ -77,6 +77,36 @@ class DeadlockException( Exception ):
 ##Following class represents the leader
 ####################################################
 
+class IssuedJobTracker:
+    """ Class that tracks the number of issued jobs and categorizes them
+    by the node type they can run on.
+    """
+    def __init__(self, nodeShapes, preemptableNodeShapes):
+        #smallest to largest
+        self.nodeShapes = nodeShapes.sort()
+        self.preemptableNodeShapes = preemptableNodeShapes.sort()
+        self.jobsIssued = {nodeShape:0 for nodeShape in self.nodeShapes}
+        self.preemptableJobsIssued = {nodeShape:0 for nodeShape in self.nodeShapes}
+
+    def _smallestNodeShape(self, jobNode):
+        for nodeShape in self.nodeShapes:
+            if jobNode.memory <= nodeShape.memory and jobNode.cores <= nodeShape.cores and jobNodes.disk <= nodeShape.disk:
+                return nodeShape
+
+    def addJob(self, jobNode):
+        nodeShape = self._smallestNodeShape(jobNode)
+        if jobNode.preemptable:
+            self.preemptableJobsIssued[nodeShape] += 1
+        else:
+            self.jobsIssued[nodeShape] += 1
+    def removeJob(self, jobNode):
+        nodeShape = self._smallestNodeShape(jobNode)
+        if jobNode.preemptable:
+            self.preemptableJobsIssued[nodeShape] -= 1
+        else:
+            self.jobsIssued[nodeShape] -= 1
+        
+
 class Leader:
     """ Class that encapsulates the logic of the leader.
     """
@@ -113,7 +143,7 @@ class Leader:
         self.jobBatchSystemIDToIssuedJob = {}
 
         # Number of preempetable jobs currently being run by batch system
-        self.preemptableJobsIssued = 0
+        self.issuedJobTracker = IssuedJobTracker(nodeShapes = provisioner.nodeShapes, preemptableNodeShapes=provisioner.preemptableNodeShapes)
 
         # Tracking the number service jobs issued,
         # this is used limit the number of services issued to the batch system
@@ -523,10 +553,9 @@ class Leader:
                                     self.jobStoreLocator, jobNode.jobStoreID))
         jobBatchSystemID = self.batchSystem.issueBatchJob(jobNode)
         self.jobBatchSystemIDToIssuedJob[jobBatchSystemID] = jobNode
-        if jobNode.preemptable:
-            # len(jobBatchSystemIDToIssuedJob) should always be greater than or equal to preemptableJobsIssued,
-            # so increment this value after the job is added to the issuedJob dict
-            self.preemptableJobsIssued += 1
+        # len(jobBatchSystemIDToIssuedJob) should always be greater than or equal to preemptableJobsIssued,
+        # so increment this value after the job is added to the issuedJob dict
+        self.issuedJobTracker.addJob(jobNode)
         cur_logger = (logger.debug if jobNode.jobName.startswith(self.debugJobNames)
                       else logger.info)
         cur_logger("Issued job %s with job batch system ID: "
@@ -563,7 +592,7 @@ class Leader:
             self.issueJob(self.preemptableServiceJobsToBeIssued.pop())
             self.preemptableServiceJobsIssued += 1
 
-    def getNumberOfJobsIssued(self, preemptable=None):
+    def getNumberOfJobsIssued(self, preemptable=None, jobShape=None):
         """
         Gets number of jobs that have been added by issueJob(s) and not
         removed by removeJob
@@ -573,21 +602,25 @@ class Leader:
           just the number of non-preemptable jobs.
         """
         #assert self.jobsIssued >= 0 and self._preemptableJobsIssued >= 0
-        if preemptable is None:
-            return len(self.jobBatchSystemIDToIssuedJob)
-        elif preemptable:
-            return self.preemptableJobsIssued
+        if jobShape is None:
+            if preemptable:
+                return sum(self.issuedJobTracker.preemptableJobsIssued.values())
+            else:
+                return sum(self.issuedJobTracker.jobsIssued.values())
         else:
-            assert len(self.jobBatchSystemIDToIssuedJob) >= self.preemptableJobsIssued
-            return len(self.jobBatchSystemIDToIssuedJob) - self.preemptableJobsIssued
+            if preemptable:
+                return self.issuedJobTracker.preemptableJobsIssued[jobShape]
+            else:
+                return self.issuedJobTracker.jobsIssued[jobShape]
 
-    def getNumberAndAvgRuntimeOfCurrentlyRunningJobs(self):
+    def getNumberAndAvgRuntimeOfCurrentlyRunningJobs(self, jobShape=None):
         """
         Returns a tuple (x, y) where x is number of currently running jobs and y
         is the average number of seconds (as a float)
         the jobs have been running for.
         """
         runningJobs = self.batchSystem.getRunningBatchJobIDs()
+        
         return len(runningJobs), 0 if len(runningJobs) == 0 else float(sum(runningJobs.values()))/len(runningJobs)
 
     def getJobStoreID(self, jobBatchSystemID):
@@ -602,11 +635,9 @@ class Leader:
         """
         assert jobBatchSystemID in self.jobBatchSystemIDToIssuedJob
         jobNode = self.jobBatchSystemIDToIssuedJob[jobBatchSystemID]
-        if jobNode.preemptable:
-            # len(jobBatchSystemIDToIssuedJob) should always be greater than or equal to preemptableJobsIssued,
-            # so decrement this value before removing the job from the issuedJob map
-            assert self.preemptableJobsIssued > 0
-            self.preemptableJobsIssued -= 1
+        # len(jobBatchSystemIDToIssuedJob) should always be greater than or equal to preemptableJobsIssued,
+        # so decrement this value before removing the job from the issuedJob map
+        self.issuedJobTracker.removeJob(jobNode)
         del self.jobBatchSystemIDToIssuedJob[jobBatchSystemID]
         # If service job
         if jobNode.jobStoreID in self.toilState.serviceJobStoreIDToPredecessorJob:
