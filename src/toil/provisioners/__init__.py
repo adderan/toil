@@ -90,11 +90,12 @@ class Cluster(object):
         self.provisioner.startMonitoring(self.clusterName, args)
 
 class Node(object):
-    def __init__(self, publicIP, privateIP, name, launchTime):
+    def __init__(self, publicIP, privateIP, name, launchTime, nodeType):
         self.publicIP = publicIP
         self.privateIP = privateIP
         self.name = name
         self.launchTime = launchTime
+        self.nodeType = nodeType
 
     def __str__(self):
         return "%s at %s" % (self.name, self.publicIP)
