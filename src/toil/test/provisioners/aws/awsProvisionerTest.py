@@ -53,7 +53,7 @@ class AbstractAWSAutoscaleTest(ToilTest):
 
     def createClusterUtil(self):
         callCommand = ['toil', 'launch-cluster', '-p=aws', '--keyPairName=%s' % self.keyName,
-                       '--nodeType=%s' % self.instanceType, self.clusterName]
+                       '--nodeType=%s' % self.leaderInstanceType, self.clusterName]
         subprocess.check_call(callCommand)
 
     def cleanJobStoreUtil(self):
@@ -62,10 +62,11 @@ class AbstractAWSAutoscaleTest(ToilTest):
 
     def __init__(self, methodName):
         super(AbstractAWSAutoscaleTest, self).__init__(methodName=methodName)
-        self.instanceType = 'm3.large'
-        self.keyName = 'jenkins@jenkins-master'
+        self.leaderInstanceType = 'm3.large'
+        self.instanceTypes = ['m3.large']
+        self.keyName = 'adderan@ucsc.edu'
         self.clusterName = 'aws-provisioner-test-' + str(uuid4())
-        self.numWorkers = 2
+        self.numWorkers = ["2"]
         self.numSamples = 2
         self.spotBid = '0.15'
 
@@ -90,6 +91,7 @@ class AbstractAWSAutoscaleTest(ToilTest):
         """
         raise NotImplementedError()
 
+
     @abstractmethod
     def _runScript(self, toilOptions):
         """
@@ -103,7 +105,7 @@ class AbstractAWSAutoscaleTest(ToilTest):
 
     def _test(self, spotInstances=False, fulfillableBid=True):
         if not fulfillableBid:
-            self.spotBid = '0.01'
+            self.spotBids = ['0.01']
         from toil.provisioners.aws.awsProvisioner import AWSProvisioner
         self.createClusterUtil()
         # get the leader so we know the IP address - we don't need to wait since create cluster
@@ -136,14 +138,14 @@ class AbstractAWSAutoscaleTest(ToilTest):
 
         if spotInstances:
             toilOptions.extend([
-                '--preemptableNodeType=%s:%s' % (self.instanceType, self.spotBid),
+                '--preemptableNodeTypes=%s' % ",".join(self.instanceTypes),
                 # The RNASeq pipeline does not specify a preemptability requirement so we
                 # need to specify a default, otherwise jobs would never get scheduled.
                 '--defaultPreemptable',
-                '--maxPreemptableNodes=%s' % self.numWorkers])
+                '--maxPreemptableNodes=%s' % ",".join(self.numWorkers)])
         else:
-            toilOptions.extend(['--nodeType=' + self.instanceType,
-                                '--maxNodes=%s' % self.numWorkers])
+            toilOptions.extend(['--nodeTypes=' + ",".join(self.instanceTypes),
+                                '--maxNodes=%s' % ",".join(self.numWorkers)])
 
         self._runScript(toilOptions)
 
@@ -216,6 +218,42 @@ class AWSAutoscaleTest(AbstractAWSAutoscaleTest):
     def testSpotAutoScale(self):
         self._test(spotInstances=True)
 
+class AWSAutoscaleTest(AbstractAWSAutoscaleTest):
+
+    def __init__(self, name):
+        super(AWSAutoscaleTest, self).__init__(name)
+        self.clusterName = 'provisioner-test-' + str(uuid4())
+
+    def setUp(self):
+        super(AWSAutoscaleTest, self).setUp()
+        self.jobStore = 'aws:%s:autoscale-%s' % (self.awsRegion(), uuid4())
+
+    def _getScript(self):
+        sseKeyFile = os.path.join(os.getcwd(), 'keyFile')
+        with open(sseKeyFile, 'w') as f:
+            f.write('01234567890123456789012345678901')
+        self.rsyncUtil(os.path.join(self._projectRootPath(), 'src/toil/test/sort/sort.py'), ':/home/sort.py')
+        self.rsyncUtil(sseKeyFile, ':/home/keyFile')
+        os.unlink(sseKeyFile)
+
+    def _runScript(self, toilOptions):
+        # the file to sort is included in the Toil appliance so we know it will be on every node in the cluster
+        # hacky, but it works.
+        runCommand = ['/home/venv/bin/python', '/home/sort.py', '--fileToSort=/home/s3am/bin/asadmin']
+        runCommand.extend(toilOptions)
+        runCommand.append('--sseKey=/home/keyFile')
+        self.sshUtil(runCommand)
+
+    @integrative
+    @needs_aws
+    def testAutoScale(self):
+        self._test(spotInstances=False)
+
+    @integrative
+    @needs_aws
+    def testSpotAutoScale(self):
+        self._test(spotInstances=True)
+
 
 class AWSRestartTest(AbstractAWSAutoscaleTest):
     """
@@ -228,7 +266,7 @@ class AWSRestartTest(AbstractAWSAutoscaleTest):
 
     def setUp(self):
         super(AWSRestartTest, self).setUp()
-        self.instanceType = 't2.micro'
+        self.instanceTypes = ['t2.micro']
         self.scriptName = "/home/restartScript.py"
         self.jobStore = 'aws:%s:restart-%s' % (self.awsRegion(), uuid4())
 
@@ -275,7 +313,6 @@ class AWSRestartTest(AbstractAWSAutoscaleTest):
     def testAutoScaledCluster(self):
         self._test()
 
-
 class PremptableDeficitCompensationTest(AbstractAWSAutoscaleTest):
 
     def __init__(self, name):
@@ -284,7 +321,7 @@ class PremptableDeficitCompensationTest(AbstractAWSAutoscaleTest):
 
     def setUp(self):
         super(PremptableDeficitCompensationTest, self).setUp()
-        self.instanceType = 'm3.large' # instance needs to be available on the spot market
+        self.instanceTypes = ['m3.large'] # instance needs to be available on the spot market
         self.jobStore = 'aws:%s:deficit-%s' % (self.awsRegion(), uuid4())
 
     def test(self):

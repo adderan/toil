@@ -26,7 +26,7 @@ from toil.job import Job
 
 sortMemory = human2bytes('1000M')
 
-def setup(job, inputFile, N, downCheckpoints):
+def setup(job, inputFile, N, downCheckpoints, options):
     """Sets up the sort.
     """
     # insure default resource requirements are being set correctly
@@ -40,9 +40,9 @@ def setup(job, inputFile, N, downCheckpoints):
     job.fileStore.logToMaster(" Starting the merge sort ")
     job.addFollowOnJobFn(cleanup, job.addChildJobFn(down, 
                         inputFileStoreID, N, downCheckpoints, 
-                        checkpoint=downCheckpoints).rv(), inputFile)
+                        checkpoint=downCheckpoints, options=options).rv(), inputFile)
 
-def down(job, inputFileStoreID, N, downCheckpoints, memory=sortMemory):
+def down(job, inputFileStoreID, N, downCheckpoints, options, memory=sortMemory):
     """Input is a file and a range into that file to sort and an output location in which
     to write the sorted file.
     If the range is larger than a threshold N the range is divided recursively and
@@ -67,9 +67,9 @@ def down(job, inputFileStoreID, N, downCheckpoints, memory=sortMemory):
         #Call down recursively
         return job.addFollowOnJobFn(up,
             job.addChildJobFn(down, job.fileStore.writeGlobalFile(t1), N, 
-                              downCheckpoints, checkpoint=downCheckpoints, memory=sortMemory).rv(),
+                              downCheckpoints, checkpoint=downCheckpoints, options=options, memory=options.sortMemory).rv(),
             job.addChildJobFn(down, job.fileStore.writeGlobalFile(t2), N, 
-                              downCheckpoints, checkpoint=downCheckpoints, memory=sortMemory).rv()).rv()          
+                              downCheckpoints, checkpoint=downCheckpoints, options=options, memory=sortMemory).rv(), options=options, memory=options.mergeMemory).rv()
     else:
         #We can sort this bit of the file
         job.fileStore.logToMaster( "Sorting file: %s of size: %s"
@@ -79,7 +79,7 @@ def down(job, inputFileStoreID, N, downCheckpoints, memory=sortMemory):
         sort(inputFile + '.sort')
         return job.fileStore.writeGlobalFile(inputFile + '.sort')
 
-def up(job, inputFileID1, inputFileID2, memory=sortMemory):
+def up(job, inputFileID1, inputFileID2, options, memory=sortMemory):
     """Merges the two files and places them in the output.
     """
     with job.fileStore.writeGlobalFileStream() as (fileHandle, outputFileStoreID):
@@ -170,6 +170,14 @@ def main():
                       "used to sort file. All lines must of length less than or equal to N or program will fail",
                       default=10000)
 
+    parser.add_argument("--sortMemory", dest="sortMemory",
+                        help="Memory for jobs that sort chunks of the file.",
+                        default="100M")
+    
+    parser.add_argument("--mergeMemory", dest="mergeMemory",
+                        help="Memor for jobs that collate results.",
+                        default="100M")
+
     options = parser.parse_args()
 
     if options.fileToSort is None:
@@ -183,7 +191,7 @@ def main():
 
     #Now we are ready to run
     Job.Runner.startToil(Job.wrapJobFn(setup, options.fileToSort, int(options.N), False,
-                                       memory=sortMemory), options)
+                                       memory=sortMemory, options=options), options)
 
 if __name__ == '__main__':
     main()

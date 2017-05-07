@@ -51,14 +51,11 @@ class AWSProvisioner(AbstractProvisioner):
         self.instanceMetaData = get_instance_metadata()
         self.clusterName = self._getClusterNameFromTags(self.instanceMetaData)
         self.ctx = self._buildContext(clusterName=self.clusterName)
-        self.spotBid = None
-        assert config.preemptableNodeType or config.nodeType
-        if config.preemptableNodeType is not None:
-            nodeBidTuple = config.preemptableNodeType.split(':', 1)
-            self.spotBid = nodeBidTuple[1]
-            self.instanceType = ec2_instance_types[nodeBidTuple[0]]
-        else:
-            self.instanceType = ec2_instance_types[config.nodeType]
+        assert len(config.preemptableNodeTypes) > 0 or len(config.nodeTypes) > 0
+        self.instanceTypes = [ec2_instance_types[nodeType] for nodeType in config.nodeTypes]
+        self.preemptableInstanceTypes = [ec2_instance_types[nodeType] for nodeType in config.preemptableNodeTypes]
+        assert len(config.spotBids) == len(self.preemptableInstanceTypes)
+        self.spotBids = dict(zip(self.preemptableInstanceTypes, config.spotBids))
         self.leaderIP = self.instanceMetaData['local-ipv4']
         self.keyName = self.instanceMetaData['public-keys'].keys()[0]
         self.masterPublicKey = self.setSSH()
@@ -107,8 +104,8 @@ class AWSProvisioner(AbstractProvisioner):
         assert masterPublicKey.startswith('AAAAB3NzaC1yc2E'), masterPublicKey
         return masterPublicKey
 
-    def getNodeShape(self, preemptable=False):
-        instanceType = self.instanceType
+    def getNodeShape(self, nodeType):
+        instanceType = ec2_instance_types[nodeType]
         return Shape(wallTime=60 * 60,
                      memory=instanceType.memory * 2 ** 30,
                      cores=instanceType.cores,
@@ -527,8 +524,9 @@ class AWSProvisioner(AbstractProvisioner):
                 else:
                     raise
 
-    def _addNodes(self, instances, numNodes, preemptable=False):
-        bdm = self._getBlockDeviceMapping(self.instanceType)
+    def _addNodes(self, nodeType, numNodes, preemptable=False):
+        instanceType = ec2_instance_types[nodeType]
+        bdm = self._getBlockDeviceMapping(instanceType)
         arn = self._getProfileARN(self.ctx)
         keyPath = '' if not self.config.sseKey else self.config.sseKey
         entryPoint = 'mesos-slave' if not self.config.sseKey else "waitForKey.sh"
@@ -541,7 +539,7 @@ class AWSProvisioner(AbstractProvisioner):
         sgs = [sg for sg in self.ctx.ec2.get_all_security_groups() if sg.name == self.clusterName]
         kwargs = {'key_name': self.keyName,
                   'security_group_ids': [sg.id for sg in sgs],
-                  'instance_type': self.instanceType.name,
+                  'instance_type': instanceType.name,
                   'user_data': userData,
                   'block_device_map': bdm,
                   'instance_profile_arn': arn,
@@ -561,10 +559,10 @@ class AWSProvisioner(AbstractProvisioner):
                                                                   spec=kwargs, num_instances=numNodes)
                 else:
                     logger.info('Launching %s preemptable nodes', numNodes)
-                    kwargs['placement'] = getSpotZone(self.spotBid, self.instanceType.name, self.ctx)
+                    kwargs['placement'] = getSpotZone(self.spotBid, nodeType, self.ctx)
                     # force generator to evaluate
                     instancesLaunched = list(create_spot_instances(ec2=self.ctx.ec2,
-                                                                   price=self.spotBid,
+                                                                   price=self.spotBids[nodeType],
                                                                    image_id=self._discoverAMI(self.ctx),
                                                                    tags={'clusterName': self.clusterName},
                                                                    spec=kwargs,
@@ -613,7 +611,7 @@ class AWSProvisioner(AbstractProvisioner):
         return bdm
 
     @classmethod
-    def __getNodesInCluster(cls, ctx, clusterName, preemptable=False, both=False):
+    def __getNodesInCluster(cls, ctx, clusterName, preemptable=False, nodeType=None, both=False):
         for attempt in retry(predicate=AWSProvisioner.throttlePredicate):
             with attempt:
                 pendingInstances = ctx.ec2.get_only_instances(filters={'instance.group-name': clusterName,
@@ -622,6 +620,10 @@ class AWSProvisioner(AbstractProvisioner):
             with attempt:
                 runningInstances = ctx.ec2.get_only_instances(filters={'instance.group-name': clusterName,
                                                                        'instance-state-name': 'running'})
+
+        if nodeType:
+            pendingInstances = [instance for instance in pendingInstances if instance.instance_type == nodeType]
+            runningInstances = [instance for instance in runningInstances if instance.instance_type == nodeType]
         instances = set(pendingInstances)
         if not preemptable and not both:
             return [x for x in instances.union(set(runningInstances)) if x.spot_instance_request_id is None]
@@ -630,14 +632,14 @@ class AWSProvisioner(AbstractProvisioner):
         elif both:
             return [x for x in instances.union(set(runningInstances))]
 
-    def _getNodesInCluster(self, preeptable=False, both=False):
+    def _getNodesInCluster(self, preeptable=False, both=False, nodeType=None):
         if not both:
-            return self.__getNodesInCluster(self.ctx, self.clusterName, preemptable=preeptable)
+            return self.__getNodesInCluster(self.ctx, self.clusterName, preemptable=preeptable, nodeType=nodeType)
         else:
-            return self.__getNodesInCluster(self.ctx, self.clusterName, both=both)
+            return self.__getNodesInCluster(self.ctx, self.clusterName, both=both, nodeType=nodeType)
 
-    def _getWorkersInCluster(self, preemptable):
-        entireCluster = self._getNodesInCluster(both=True)
+    def getWorkersInCluster(self, preemptable, nodeType):
+        entireCluster = self._getNodesInCluster(both=True, nodeType=nodeType)
         logger.debug('All nodes in cluster %s', entireCluster)
         workerInstances = [i for i in entireCluster if i.private_ip_address != self.leaderIP and
                            preemptable != (i.spot_instance_request_id is None)]

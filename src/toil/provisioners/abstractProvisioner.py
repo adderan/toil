@@ -43,6 +43,14 @@ node) in RAM or on disk (SSD or HDD), respectively.
 """
 
 
+def smallestNodeShapeForJob(jobShape, nodeShapes):
+    for nodeShape in nodeShapes:
+        if jobShape.memory <= nodeShape.memory and jobShape.cores <= nodeShape.cores and jobShape.disk <= nodeShape.disk:
+            return nodeShape
+    import pdb
+    pdb.set_trace()
+    assert False
+
 class AbstractProvisioner(object):
     """
     An abstract base class to represent the interface for provisioning worker nodes to use in a
@@ -59,6 +67,7 @@ class AbstractProvisioner(object):
         self.statsThreads = []
         self.statsPath = config.clusterStats
         self.scaleable = isinstance(self.batchSystem, AbstractScalableBatchSystem)
+        self.preemptableNodeShapes = [self.getNodeShape(nodeType=nodeType) for nodeType in config.preemptableNodeTypes]
 
     @staticmethod
     def retryPredicate(e):
@@ -75,9 +84,10 @@ class AbstractProvisioner(object):
             # only shutdown the stats threads once
             self._shutDownStats()
         log.debug('Forcing provisioner to reduce cluster size to zero.')
-        totalNodes = self.setNodeCount(numNodes=0, preemptable=preemptable, force=True)
-        if totalNodes != 0:
-            raise RuntimeError('Provisioner was not able to reduce cluster size to zero.')
+        for nodeType in self.config.nodeTypes:
+            totalNodes = self.setNodeCount(numNodes=0, nodeType=nodeType, preemptable=preemptable, force=True)
+            if totalNodes != 0:
+                raise RuntimeError('Provisioner was not able to reduce cluster size to zero.')
 
     def _shutDownStats(self):
         def getFileName():
@@ -144,7 +154,7 @@ class AbstractProvisioner(object):
         else:
             pass
 
-    def setNodeCount(self, numNodes, preemptable=False, force=False):
+    def setNodeCount(self, numNodes, nodeType, preemptable=False, force=False):
         """
         Attempt to grow or shrink the number of prepemptable or non-preemptable worker nodes in
         the cluster to the given value, or as close a value as possible, and, after performing
@@ -167,12 +177,12 @@ class AbstractProvisioner(object):
         """
         for attempt in retry(predicate=self.retryPredicate):
             with attempt:
-                workerInstances = self._getWorkersInCluster(preemptable)
+                workerInstances = self.getWorkersInCluster(preemptable=preemptable, nodeType=nodeType)
                 numCurrentNodes = len(workerInstances)
                 delta = numNodes - numCurrentNodes
                 if delta > 0:
                     log.info('Adding %i %s nodes to get to desired cluster size of %i.', delta, 'preemptable' if preemptable else 'non-preemptable', numNodes)
-                    numNodes = numCurrentNodes + self._addNodes(workerInstances,
+                    numNodes = numCurrentNodes + self._addNodes(nodeType=nodeType,
                                                                 numNodes=delta,
                                                                 preemptable=preemptable)
                 elif delta < 0:
@@ -190,6 +200,7 @@ class AbstractProvisioner(object):
         # each node as the primary criterion to select which nodes to terminate.
         if isinstance(self.batchSystem, AbstractScalableBatchSystem):
             nodes = self.batchSystem.getNodes(preemptable)
+
             # Join nodes and instances on private IP address.
             nodes = [(instance, nodes.get(instance.private_ip_address)) for instance in instances]
             log.debug('Nodes considered to terminate: %s', ' '.join(map(str, nodes)))
@@ -229,7 +240,7 @@ class AbstractProvisioner(object):
         return len(instances)
 
     @abstractmethod
-    def _addNodes(self, instances, numNodes, preemptable):
+    def _addNodes(self, instances, numNodes, preemptable, nodeType):
         raise NotImplementedError
 
     @abstractmethod
@@ -237,7 +248,10 @@ class AbstractProvisioner(object):
         raise NotImplementedError
 
     @abstractmethod
-    def _getWorkersInCluster(self, preemptable):
+    def getWorkersInCluster(self, preemptable, nodeType):
+        """
+        Get all worker nodes in the cluster (exclude the leader).
+        """
         raise NotImplementedError
 
     @abstractmethod
@@ -245,14 +259,13 @@ class AbstractProvisioner(object):
         raise NotImplementedError
 
     @abstractmethod
-    def getNodeShape(self, preemptable=False):
+    def getNodeShape(self, nodeType=None):
         """
         The shape of a preemptable or non-preemptable node managed by this provisioner. The node
         shape defines key properties of a machine, such as its number of cores or the time
         between billing intervals.
 
-        :param preemptable: Whether to return the shape of preemptable nodes or that of
-               non-preemptable ones.
+        :param str nodeType: Node type name to return the shape of.
 
         :rtype: Shape
         """
