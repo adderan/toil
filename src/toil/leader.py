@@ -162,10 +162,10 @@ class Leader:
         self.statsAndLogging.start()
         if self.config.monitorCluster:
             from toil.provisioners.aws import ToilMtailServer
-            mtailServer = ToilMtailServer(logger)
+            self.mtailServer = ToilMtailServer()
 
         else:
-            mtailServer = None
+            self.mtailServer = None
 
         try:
 
@@ -194,8 +194,8 @@ class Leader:
         finally:
             # Ensure the stats and logging thread is properly shutdown
             self.statsAndLogging.shutdown()
-            if mtailServer:
-                mtailServer.shutdown()
+            if self.mtailServer:
+                self.mtailServer.shutdown()
 
 
         # Filter the failed jobs
@@ -539,6 +539,8 @@ class Leader:
             self.preemptableJobsIssued += 1
         cur_logger = (logger.debug if jobNode.jobName.startswith(self.debugJobNames)
                       else logger.info)
+        if self.mtailProc:
+            mtailProc.log("Issued job %s" % jobNode)
         cur_logger("Issued job %s with job batch system ID: "
                    "%s and cores: %s, disk: %s, and memory: %s",
                    jobNode, str(jobBatchSystemID), int(jobNode.cores),

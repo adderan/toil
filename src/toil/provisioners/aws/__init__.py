@@ -200,16 +200,14 @@ iamFullPolicy = dict(Version="2012-10-17", Statement=[
 
 
 class ToilMtailServer:
-    def __init__(self, logger):
-        self.logger = logger
+    def __init__(self):
         self.mtailProc = subprocess.Popen(["docker", "attach",
                                         "toil_mtail"],
                                         stdin=subprocess.PIPE, stdout=subprocess.PIPE)
-        self.mtailHandler = logging.StreamHandler(stream=self.mtailProc.stdin)
-        self.logger.addHandler(self.mtailHandler)
+    def log(self, message):
+        self.mtailProc.stdin.write(message + "\n")
 
     def shutdown(self):
-        self.logger.removeHandler(self.mtailHandler)
         self.mtailProc.kill()
 
 
