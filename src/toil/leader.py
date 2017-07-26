@@ -163,12 +163,8 @@ class Leader:
         """
         # Start the stats/logging aggregation thread
         self.statsAndLogging.start()
-        if self.config.monitorCluster:
-            from toil.provisioners.aws import ToilMtailServer
-            self.mtailServer = ToilMtailServer()
-
-        else:
-            self.mtailServer = None
+        from toil.provisioners.aws import ToilMtailServer
+        self.mtailServer = ToilMtailServer()
 
         try:
 
@@ -542,8 +538,8 @@ class Leader:
             self.preemptableJobsIssued += 1
         cur_logger = (logger.debug if jobNode.jobName.startswith(self.debugJobNames)
                       else logger.info)
-        if self.mtailProc:
-            mtailProc.log("Issued job %s" % jobNode)
+        if self.mtailServer:
+            mtailServer.log("Issued job %s" % jobNode)
         cur_logger("Issued job %s with job batch system ID: "
                    "%s and cores: %s, disk: %s, and memory: %s",
                    jobNode, str(jobBatchSystemID), int(jobNode.cores),
