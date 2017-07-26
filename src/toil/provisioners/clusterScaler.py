@@ -399,6 +399,8 @@ class ScalerThread(ExceptionalThread):
                 # Estimate of number of nodes needed to run recent jobs
                 recentJobShapes = self.jobShapes.get()
                 queuedJobs = self.scaler.leader.getJobs()
+                if hasattr(self.scaler.leader, "mtailProc"):
+                    self.scaler.leader.mtailProc.log("Detected %i queued jobs." % len(queuedJobs))
                 logger.info("Detected %i queued jobs." % len(queuedJobs))
                 queuedJobShapes = [Shape(wallTime=self.scaler.getAverageRuntime(jobName=job.jobName), memory=job.memory, cores=job.cores, disk=job.disk, preemptable=job.preemptable) for job in queuedJobs]
                 nodesToRunRecentJobs = binPacking(jobShapes=recentJobShapes, nodeShapes=self.nodeShapes)
@@ -428,7 +430,8 @@ class ScalerThread(ExceptionalThread):
                                     self.scaler.config.alphaPacking)
 
                     # Use inertia parameter to stop small fluctuations
-                    logger.info("Currently %i nodes of type %s in cluster" % (self.totalNodes[nodeShape], nodeType))
+                    if hasattr(self.scaler.leader, "mtailProc"):
+                        self.scaler.leader.mtailProc.log("Currently %i nodes of type %s in cluster" % (self.totalNodes[nodeShape], nodeType))
                     delta = self.totalNodes[nodeShape] * max(0.0, self.scaler.config.betaInertia - 1.0)
                     if self.totalNodes[nodeShape] - delta <= estimatedNodes <= self.totalNodes[nodeShape] + delta:
                         logger.debug('Difference in new (%s) and previous estimates in number of '
