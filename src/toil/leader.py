@@ -539,7 +539,7 @@ class Leader:
         cur_logger = (logger.debug if jobNode.jobName.startswith(self.debugJobNames)
                       else logger.info)
         if self.mtailServer:
-            mtailServer.log("Issued job %s" % jobNode)
+            self.mtailServer.log("Issued job %s" % jobNode)
         cur_logger("Issued job %s with job batch system ID: "
                    "%s and cores: %s, disk: %s, and memory: %s",
                    jobNode, str(jobBatchSystemID), int(jobNode.cores),
