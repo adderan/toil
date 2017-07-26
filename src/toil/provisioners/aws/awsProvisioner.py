@@ -43,8 +43,6 @@ from bd2k.util.retry import retry
 from toil.provisioners import (awsRemainingBillingInterval, awsFilterImpairedNodes,
                                Node, NoSuchClusterException)
 
-from toil.version import dockerRegistry
-
 logger = logging.getLogger(__name__)
 
 
@@ -221,16 +219,12 @@ class AWSProvisioner(AbstractProvisioner):
                            'roles will not be deleted.')
 
     @classmethod
-    def sshLeader(cls, clusterName, args=None, zone=None, appliance=True, **kwargs):
+    def sshLeader(cls, clusterName, args=None, zone=None, **kwargs):
         leader = cls._getLeader(clusterName, zone=zone)
         logger.info('SSH ready')
         kwargs['tty'] = sys.stdin.isatty()
         command = args if args else ['bash']
-        if appliance:
-            cls._sshAppliance(leader.public_dns_name, *command, **kwargs)
-        else:
-            del kwargs['tty']
-            cls._coreSSH(leader.public_dns_name, *command, **kwargs)
+        cls._sshAppliance(leader.public_dns_name, *command, **kwargs)
 
     @classmethod
     def rsyncLeader(cls, clusterName, args, zone=None, **kwargs):
@@ -313,7 +307,6 @@ class AWSProvisioner(AbstractProvisioner):
         return [Node(publicIP=i.ip_address, privateIP=i.private_ip_address,
                      name=i.id, launchTime=i.launch_time)
                 for i in workerInstances]
-
 
     def _getInstanceType(self, preemptable):
         try:
@@ -476,7 +469,7 @@ class AWSProvisioner(AbstractProvisioner):
         return stdout
 
     @classmethod
-    def _rsyncNode(cls, ip, args, applianceName='toil_leader', appliance=False, **kwargs):
+    def _rsyncNode(cls, ip, args, applianceName='toil_leader', **kwargs):
         remoteRsync = "docker exec -i %s rsync" % applianceName  # Access rsync inside appliance
         parsedArgs = []
         sshCommand = "ssh"
@@ -494,9 +487,7 @@ class AWSProvisioner(AbstractProvisioner):
             parsedArgs.append(i)
         if not hostInserted:
             raise ValueError("No remote host found in argument list")
-        command = ['rsync', '-e', sshCommand]
-        if appliance:
-            command += ['--rsync-path', remoteRsync]
+        command = ['rsync', '-e', sshCommand, '--rsync-path', remoteRsync]
         logger.debug("Running %r.", command + parsedArgs)
         return subprocess.check_call(command + parsedArgs)
 

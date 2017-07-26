@@ -13,7 +13,6 @@
 # limitations under the License.
 import logging
 import os
-import tempfile
 import subprocess
 from collections import namedtuple
 from operator import attrgetter
@@ -192,7 +191,6 @@ ec2FullPolicy = dict(Version="2012-10-17", Statement=[
 
 s3FullPolicy = dict(Version="2012-10-17", Statement=[
     dict(Effect="Allow", Resource="*", Action="s3:*")])
-
 
 sdbFullPolicy = dict(Version="2012-10-17", Statement=[
     dict(Effect="Allow", Resource="*", Action="sdb:*")])
