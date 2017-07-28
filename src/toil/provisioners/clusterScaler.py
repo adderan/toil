@@ -349,6 +349,7 @@ class ScalerThread(ExceptionalThread):
         self.nodeShapeToType = dict(zip(self.nodeShapes, self.nodeTypes))
 
         self.nodeShapes.sort()
+        self.ignoredNodes = set()
 
         assert len(self.nodeShapes) > 0
 
@@ -453,7 +454,8 @@ class ScalerThread(ExceptionalThread):
                         logger.info('Changing the number of %s from %s to %s.', nodeType, self.totalNodes[nodeShape],
                                     estimatedNodes)
                         self.totalNodes[nodeShape] = self.setNodeCount(nodeType=nodeType, numNodes=estimatedNodes, preemptable=nodeShape.preemptable)
-                        
+
+                    self._terminateIgnoredNodes()
 
                     if self.stats:
                         self.stats.checkStats()
@@ -512,6 +514,7 @@ class ScalerThread(ExceptionalThread):
         return self.scaler.provisioner.addNodes(nodeType=nodeType, numNodes=numNodes, preemptable=preemptable)
 
     def _removeNodes(self, nodeToNodeInfo, nodeType, numNodes, preemptable=False, force=False):
+        removedNodes = 0
         # If the batch system is scalable, we can use the number of currently running workers on
         # each node as the primary criterion to select which nodes to terminate.
         if isinstance(self.scaler.leader.batchSystem, AbstractScalableBatchSystem):
@@ -527,15 +530,19 @@ class ScalerThread(ExceptionalThread):
             logger.debug('Nodes considered to terminate: %s', ' '.join(map(str, nodeToNodeInfo)))
             nodesToTerminate = self.chooseNodes(nodeToNodeInfo, force, preemptable=preemptable)
 
+            nodesToTerminate = nodesToTerminate[:numNodes]
+            removedNodes = len(nodesToTerminate)
+
             #Tell the batch system to stop sending jobs to these nodes
             for (node, nodeInfo) in nodesToTerminate:
+                self.ignoredNodes.add(node)
                 self.scaler.leader.batchSystem.ignoreNode(node.privateIP)
 
             if not force:
                 # Filter out nodes with jobs still running. These
-                # will be terminated on a future call to _removeNodes, 
-                # since the batch system is no longer sending jobs to 
-                # them.
+                # will be terminated in _removeIgnoredNodes later on
+                # once all jobs have finished, but they will be ignored by
+                # the batch system and cluster scaler from now on
                 nodesToTerminate = [(node,nodeInfo) for (node,nodeInfo) in nodesToTerminate if nodeInfo is not None and nodeInfo.workers < 1]
             #nodesToTerminate = nodesToTerminate[:numNodes]
             nodesToTerminate = {node:nodeInfo for (node, nodeInfo) in nodesToTerminate}
@@ -544,10 +551,19 @@ class ScalerThread(ExceptionalThread):
             # Without load info all we can do is sort instances by time left in billing cycle.
             nodeToNodeInfo = sorted(nodeToNodeInfo, key=self.scaler.provisioner.remainingBillingInterval)
             nodeToNodeInfo = [instance for instance in islice(nodeToNodeInfo, numNodes)]
+            removedNodes = len(nodeToNodeInfo)
         logger.info('Terminating %i instance(s).', len(nodeToNodeInfo))
         if nodeToNodeInfo:
             self.scaler.provisioner.terminateNodes(nodeToNodeInfo)
-        return len(nodeToNodeInfo)
+        return removedNodes
+
+    def _terminateIgnoredNodes(self):
+        #Try to terminate any straggling nodes that we designated for
+        #termination, but which still has workers running
+        nodeToNodeInfo = self.getNodes(preemptable=None)
+        nodeToNodeInfo = {node:nodeToNodeInfo[node] for node in nodeToNodeInfo if node in self.ignoredNodes}
+        nodeToNodeInfo = {node:nodeToNodeInfo[node] for node in nodeToNodeInfo if nodeToNodeInfo[node] is not None and nodeToNodeInfo[node].workers < 1}
+        self.scaler.provisioner.terminateNodes(nodeToNodeInfo)
 
     def chooseNodes(self, nodeToNodeInfo, force=False, preemptable=False):
         nodesToTerminate = []
@@ -569,12 +585,7 @@ class ScalerThread(ExceptionalThread):
         # Sort nodes by number of workers and time left in billing cycle
         nodesToTerminate.sort(key=lambda ((node, nodeInfo)): (
             nodeInfo.workers if nodeInfo else 1,
-            self.scaler.provisioner.remainingBillingInterval(node))
-                              )
-        if not force:
-            # don't terminate nodes that still have > 15% left in their allocated (prepaid) time
-            nodesToTerminate = [(node, i) for node, i in nodesToTerminate if
-                                self.scaler.provisioner.remainingBillingInterval(node) <= 0.15]
+            self.scaler.provisioner.remainingBillingInterval(node)))
         return nodesToTerminate
 
     def getNodes(self, preemptable):
