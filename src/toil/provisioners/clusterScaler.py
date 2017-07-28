@@ -561,9 +561,17 @@ class ScalerThread(ExceptionalThread):
         #Try to terminate any straggling nodes that we designated for
         #termination, but which still has workers running
         nodeToNodeInfo = self.getNodes(preemptable=None)
+        logger.info("There are %i nodes being ignored by the batch system" % len(self.ignoredNodes))
         nodeToNodeInfo = {node:nodeToNodeInfo[node] for node in nodeToNodeInfo if node in self.ignoredNodes}
+
         nodeToNodeInfo = {node:nodeToNodeInfo[node] for node in nodeToNodeInfo if nodeToNodeInfo[node] is not None and nodeToNodeInfo[node].workers < 1}
-        self.scaler.provisioner.terminateNodes(nodeToNodeInfo)
+
+        logger.info("Terminating %i nodes that are being ignored by the batch system, with no workers still running" % len(nodeToNodeInfo))
+
+        for node in nodeToNodeInfo:
+            self.ignoredNodes.remove(node)
+        if len(nodeToNodeInfo) > 0:
+            self.scaler.provisioner.terminateNodes(nodeToNodeInfo)
 
     def chooseNodes(self, nodeToNodeInfo, force=False, preemptable=False):
         nodesToTerminate = []
