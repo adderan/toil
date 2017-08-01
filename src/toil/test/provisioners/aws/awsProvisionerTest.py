@@ -117,7 +117,7 @@ class AbstractAWSAutoscaleTest(ToilTest):
         """
         raise NotImplementedError()
 
-    def _test(self, spotInstances=False, fulfillableBid=True):
+    def _test(self):
         """
         Does the work of the testing. Many features' test are thrown in here is no particular
         order
@@ -125,8 +125,6 @@ class AbstractAWSAutoscaleTest(ToilTest):
         :param spotInstances: Specify if you want to use spotInstances
         :param fulfillableBid: If false, the bid will never succeed. Used to test bid failure
         """
-        if not fulfillableBid:
-            self.spotBids = ['0.01']
         from toil.provisioners.aws.awsProvisioner import AWSProvisioner
         self.launchCluster()
         # get the leader so we know the IP address - we don't need to wait since create cluster
@@ -159,8 +157,6 @@ class AbstractAWSAutoscaleTest(ToilTest):
                        '--logFile=/home/sort.log',
                        '--provisioner=aws']
 
-        if spotInstances:
-            self.instanceTypes = ["%s:%f" % (instanceType, spotBid) for (instanceType, spotBid) in zip(self.instanceTypes, self.spotBids)]
         toilOptions.extend(['--nodeTypes=' + ",".join(self.instanceTypes),
                             '--maxNodes=%s' % ",".join(self.numWorkers)])
 
@@ -384,19 +380,20 @@ class AWSRestartTest(AbstractAWSAutoscaleTest):
         self._test()
 
 @pytest.mark.timeout(1200)
-class PremptableDeficitCompensationTest(AbstractAWSAutoscaleTest):
+class PreemptableDeficitCompensationTest(AbstractAWSAutoscaleTest):
 
     def __init__(self, name):
-        super(PremptableDeficitCompensationTest, self).__init__(name)
+        super(PreemptableDeficitCompensationTest, self).__init__(name)
         self.clusterName = 'deficit-test-' + str(uuid4())
 
     def setUp(self):
-        super(PremptableDeficitCompensationTest, self).setUp()
-        self.instanceTypes = ['m3.large'] # instance needs to be available on the spot market
+        super(PreemptableDeficitCompensationTest, self).setUp()
+        self.instanceTypes = ['m3.large:0.01', "m3.large"] # instance needs to be available on the spot market
+        self.numWorkers = ["1", "1"]
         self.jobStore = 'aws:%s:deficit-%s' % (self.awsRegion(), uuid4())
 
     def test(self):
-        self._test(spotInstances=True, fulfillableBid=False)
+        self._test()
 
     def _getScript(self):
         def userScript():
@@ -426,6 +423,8 @@ class PremptableDeficitCompensationTest(AbstractAWSAutoscaleTest):
         AWSProvisioner._sshAppliance(self.leader.ip_address, 'tee', '/home/userScript.py', input=script)
 
     def _runScript(self, toilOptions):
+        toilOptions.extend([
+            '--preemptableCompensation=1.0'])
         command = ['/home/venv/bin/python', '/home/userScript.py']
         command.extend(toilOptions)
         self.sshUtil(command)
