@@ -1,5 +1,5 @@
-gauge autoscaler_cur_size
-gauge autoscaler_desired_size
+gauge autoscaler_cur_size by node_type
+gauge autoscaler_desired_size by node_type
 gauge autoscaler_queue_size
 counter total_issued_jobs
 counter issued_jobs by job_type
@@ -9,12 +9,12 @@ counter total_failed_jobs
 counter failed_jobs by job_type
 counter missing_jobs
 
-/desired_size (?P<desired_size>\d+)/ {
-     autoscaler_desired_size = $desired_size
+/desired_size '(?P<node_type>\S+)' (?P<desired_size>\d+)/ {
+     autoscaler_desired_size[$node_type] = $desired_size
 }
 
-/current_size (?P<cur_size>\d+)/ {
-     autoscaler_cur_size = $cur_size
+/current_size '(?P<node_type>\S+)' (?P<cur_size>\d+)/ {
+     autoscaler_cur_size[$node_type] = $cur_size
 }
 
 /queue_size (?P<queue_size>\d+)/ {

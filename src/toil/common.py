@@ -1121,9 +1121,9 @@ class ToilMetrics:
     def logMissingJob(self):
         self.log("missing_job")
 
-    def logClusterSize(self, currentSize, desiredSize):
-        self.log("current_size %i" % currentSize)
-        self.log("desired_dize %i" % desiredSize)
+    def logClusterSize(self, nodeType, currentSize, desiredSize):
+        self.log("current_size %s %i" % (nodeType, currentSize))
+        self.log("desired_dize %s %i" % (nodeType, desiredSize))
 
     def logQueueSize(self, queueSize):
         self.log("queue_size %i" % queueSize)
